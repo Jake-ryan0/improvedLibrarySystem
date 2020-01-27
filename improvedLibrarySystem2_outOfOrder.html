@@ -1,0 +1,199 @@
+<script src="../improved_runWithDebugger/simpleTest.js"></script>
+<script>
+// Requirements:
+  // it should return the library when supplied libraryName
+  // it should create and store a library when supplied with a callback (callback must return library)
+  // it should pass the dependency libraries into the callback, making them accessible
+  // it should accept any number of depencies
+// Improved Requirements:
+  // it should be able to access the required library even when the requiring library is called first
+  // it should accept any number of out or order dependencies
+  // it should accept libraries that require other libraries that require other libraries etc.
+  // it should only call a callback once
+
+(function() {
+  var libraryStorage = {test: {
+    dependencies: [],
+    callback: function() {return "test library"},
+    code: "test library"
+  }};
+
+  function librarySystem(libraryName, ArrayOfDependencyNames, callback) {
+    if (arguments.length === 0) {
+      return libraryStorage;
+    }
+
+    if (arguments.length > 1) {
+      return storeLibrary(libraryName, ArrayOfDependencyNames, callback);
+    } else {
+      return callLibrary(libraryName);
+    }
+  }
+
+  function storeLibrary(libraryName, ArrayOfDependencyNames, callback) {
+    libraryStorage[libraryName] = {
+      dependencies: ArrayOfDependencyNames,
+      callback: callback,
+      code: undefined
+    }
+  }
+
+  function callLibrary(libraryName) {
+    var library = libraryStorage[libraryName];
+    if (library === undefined) {
+      throw new ReferenceError(libraryName + "  does not exist");
+    }
+    var allDependenciesExistRecursively = (function checkDependenciesExistRecursively(libraryName) {
+      var library = libraryStorage[libraryName];
+      return library.dependencies.every(function(dependency) {
+        if (libraryStorage[dependency].dependencies.length) {
+          return checkDependenciesExistRecursively(dependency);
+        }
+        return dependency in libraryStorage;
+      });
+    })(libraryName);
+
+    var allDependenciesLoadedRecursively = (function checkDependenciesLoadedRecursively(libraryName) {
+      var library = libraryStorage[libraryName];
+      return library.dependencies.every(function(dependency) {
+        if (libraryStorage[dependency].dependencies.length) {
+          return checkDependenciesLoadedRecursively(dependency);
+        }
+        return dependency.code in libraryStorage;
+      });
+    })(libraryName);
+
+    if (allDependenciesExistRecursively) {
+      if (allDependenciesLoadedRecursively) {
+        return loadLibraryCode(libraryName);
+      } else {
+       return loadLibraryDependenciesRecursively(libraryName);
+      }
+    } else {
+      // TODO: specify which dependency is missing
+      throw new ReferenceError("this library is missing dependencies ");
+    }
+  }
+
+  function loadLibraryCode(libraryName) {
+    var library = libraryStorage[libraryName];
+    var arrayOfDependencyCode = library.dependencies.map(function(dependencyName) {
+      var dependency = libraryStorage[dependencyName];
+      if (dependency.code === undefined) {
+        dependency.code = dependency.callback();
+      }
+      return dependency.code;
+    });
+
+    if (library.code === undefined) {
+      library.code = library.callback.apply(null, arrayOfDependencyCode);
+    }
+    return library.code;
+  }
+
+  function loadLibraryDependenciesRecursively(libraryName) {
+    var library = libraryStorage[libraryName];
+
+    library.dependencies.forEach(function(dependency) {
+      if (libraryStorage[dependency].dependencies.length) {
+        loadLibraryDependenciesRecursively(dependency);
+      }
+    });
+    return loadLibraryCode(libraryName);
+  }
+
+  window.librarySystem = librarySystem;
+})();
+
+tests({
+  "it should return the library when libraryName is supplied": function() {
+    var returned = librarySystem("test");
+    eq(returned, "test library");
+  },
+  "it should create and store a library when supplied a callback that returns the library": function() {
+    librarySystem("test2", [], function() {
+      return "test2 library";
+    });
+
+    var returned = librarySystem("test2");
+    eq(returned, "test2 library");
+  },
+  "it should pass the dependency libraries associated with dependency names into the callback, making them accessible": function() {
+    librarySystem('dependency', [], function() {
+      return "first dependency";
+    });
+
+    librarySystem('app', ['dependency'], function(dependency) {
+      return 'app with ' + dependency;
+    });
+
+    eq(librarySystem("app"), "app with first dependency");
+  },
+  // no additional code required
+  "it should accept unlimited amounts of dependencies": function() {
+    librarySystem('name', [], function() {
+      return 'Gordon';
+    });
+
+    librarySystem('company', [], function() {
+      return 'Watch and Code';
+    });
+
+    librarySystem('workBlurb', ['name', 'company'], function(name, company) {
+      return name + ' works at ' + company;
+    });
+
+    eq(librarySystem('workBlurb'), 'Gordon works at Watch and Code');
+  },
+  "it should be able to access the required library even when the requiring library is called first": function() {
+    librarySystem('app2', ['dependency2'], function(dependency2) {
+      return 'app2 with ' + dependency2;
+    });
+
+    librarySystem('dependency2', [], function() {
+      return "first dependency2";
+    });
+
+    eq(librarySystem("app2"), "app2 with first dependency2");
+  },
+  "it should accept any number of out or order dependencies": function() {
+    librarySystem('iRequire2Libraries', ['firstRequiredLibrary', 'secondRequiredLibrary'], function(first, second) {
+      return "this function requires " + first + " and " + second;
+    });
+    librarySystem('secondRequiredLibrary', [], function() {
+      return "2nd required library";
+    });
+    librarySystem('firstRequiredLibrary', [], function() {
+      return "first required library";
+    });
+
+    var returned = librarySystem('iRequire2Libraries');
+    eq(returned, "this function requires first required library and 2nd required library");
+  },
+  "it should accept libraries that require other libraries that require other libraries etc.": function() {
+    librarySystem('myApp', ['fakeAccounting'], function(fakeAccounting) {
+      return "myApp requires " + fakeAccounting;
+    });
+    librarySystem('fakeJquery', [], function() {
+      return "fakeJquery code";
+    });
+    librarySystem('fakeAccounting', ['fakeJquery'], function(fakeJquery) {
+      return "fake Accounting code which requires " + fakeJquery;
+    });
+
+    var returned = librarySystem('myApp');
+    eq(returned, 'myApp requires fake Accounting code which requires fakeJquery code');
+  },
+  "it should only call a callback once": function() {
+    var counter = 0;
+    librarySystem('otherTest', [], function() {
+      counter++;
+      return "this callback should only be ran once";
+    });
+    librarySystem('otherTest');
+    eq(counter, 1);
+    librarySystem('otherTest');
+    eq(counter, 1);
+  }
+})
+</script>
